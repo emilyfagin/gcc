@@ -1,7 +1,5 @@
-/* Test pass
-   Language independent return value optimizations
-   Copyright (C) 2004-2025 Free Software Foundation, Inc.
-
+/* efagin pass - identifies function clones
+   Emily Fagin - Seneca Polytechnic College
 
 This file is part of GCC
 
@@ -19,7 +17,10 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#define INCLUDE_MEMORY
+#include <map>
+#include <string>
+#include <vector>  
+#include <stdlib.h>
 #include "config.h"
 #include "system.h"
 #include "coretypes.h"
@@ -28,45 +29,26 @@ along with GCC; see the file COPYING3.  If not see
 #include "gimple.h"
 #include "tree-pass.h"
 #include "ssa.h"
-#include "tree-pretty-print.h"
 #include "gimple-iterator.h"
-#include "gimple-walk.h"
 #include "internal-fn.h"
-#include "gimple-pretty-print.h"
-
-// Added  headers:
-
-#include "gimple.h"
-#include "gimple-ssa.h"
 #include "cgraph.h"
-#include "attribs.h"
-#include "pretty-print.h"
-#include "tree-inline.h"
-#include "intl.h"
+#include "function.h"
 #include "basic-block.h"
-
-
-// for dump_printf
-#include "tree-pretty-print.h"
-#include "diagnostic.h"
-#include "dumpfile.h"
-#include "builtins.h"
-#include <stdlib.h>
-
 
 namespace {
 
+// Pass metadata
 const pass_data pass_data_efagin =
 {
-  GIMPLE_PASS, /* type */
-  "efagin", /* name */
-  OPTGROUP_NONE, /* optinfo_flags */
-  TV_NONE, /* tv_id */
-  PROP_cfg, /* properties_required */
-  0, /* properties_provided */
-  0, /* properties_destroyed */
-  0, /* todo_flags_start */
-  0, /* todo_flags_finish */
+  GIMPLE_PASS,    /* type */
+  "efagin",       /* name */
+  OPTGROUP_NONE,  /* optinfo_flags */
+  TV_NONE,        /* tv_id */
+  PROP_cfg,       /* properties_required */
+  0,              /* properties_provided */
+  0,              /* properties_destroyed */
+  0,              /* todo_flags_start */
+  0,              /* todo_flags_finish */
 };
 
 class pass_efagin : public gimple_opt_pass
@@ -76,52 +58,77 @@ public:
     : gimple_opt_pass (pass_data_efagin, ctxt)
   {}
 
-  /* opt_pass methods: (--> all the time, so return 1)*/
+  /* gate function: always execute */
   bool gate (function *) final override { return 1; }
 
-  unsigned int execute (function *fun) final override {
-    basic_block bb;
-    struct cgraph_node *node;
+  unsigned int execute (function *) final override;
+};
 
-    int func_cnt = 0, bb_cnt = 0, stmt_cnt = 0;
+unsigned int pass_efagin::execute(function* fun)
+{
+  // Static structure to hold function clones, for comparison
+  static std::map<std::string, std::vector<std::string>>* function_clones = nullptr;
 
-    // macro for iterating through all functions
-    FOR_EACH_FUNCTION (node) {
-      if (dump_file) { // if a dumpfile exists
-        fprintf(dump_file, "=== Function %d Name '%s' ===\n", ++func_cnt, node->name());
-      }
-    }
-
-    // macro for iterating through all basic blocks
-    FOR_EACH_BB_FN(bb, fun) {
-      bb_cnt++;
-      if (dump_file) {
-        fprintf(dump_file, "=== Basic block count: %d ===\n", bb_cnt);
-      }
-      for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi); gsi_next (&gsi)) {
-        gimple *g = gsi_stmt (gsi);
-        stmt_cnt++;
-        if (dump_file) {
-          fprintf (dump_file, "----- Statement Count: %d ------\n", stmt_cnt);
-          print_gimple_stmt (dump_file, g, 0, TDF_VOPS|TDF_MEMSYMS);
-        } 
-      }
-    }
-
-
-    if (dump_file) {
-      fprintf(dump_file, "\n\n## End efagin diagnost, strt regular dump of curr gimple###\n\n");
-    }
+  // If dump file not enabled, exit
+  if (!dump_file || !fun)
     return 0;
+
+  // If function_clones not initialized, initialize it
+  if (!function_clones) {
+    function_clones = new std::map<std::string, std::vector<std::string>>();
   }
 
-}; // class pass_efagin
+  // Get the function's node, check if node exists
+  struct cgraph_node *node = cgraph_node::get(fun->decl);
+  if (!node)
+    return 0;
 
-} // anon namespace
+  // Get the full function name (pointer first, then convert to String)
+  const char *fname = node->name(); 
+  if (!fname)
+    return 0;
+
+  std::string name(fname);
+
+  // Skip resolver functions
+  if (name.find(".resolver") != std::string::npos)
+    return 0;
+
+  // Extract base function name (remove everything after first dot)
+  std::string base_name = name.find_first_of(".") != std::string::npos 
+    ? name.substr(0, name.find_first_of(".")) 
+    : name;
+
+  // Check if base not recorded yet
+  if (function_clones->find(base_name) == function_clones->end()) {
+  // First time seeing this base function
+    (*function_clones)[base_name] = std::vector<std::string>();
+
+  // If base already recorded (found a clone)
+  } else {
+
+    fprintf(dump_file, "-----------------------------------\n");
+    fprintf(dump_file, "New clone detected for base function: %s\n\n", base_name.c_str());
+
+    // Print existing variants
+    for (const auto& variant : (*function_clones)[base_name]) {
+      fprintf(dump_file, "     Existing: %s\n", variant.c_str());
+    }
+
+    // Print the new variant
+    fprintf(dump_file, "  New variant: %s\n\n-----------------------------------\n\n", name.c_str());
+  }
+
+  // Add this function name to the list of variants for the base function
+  (*function_clones)[base_name].push_back(name);
+
+  return 0;
+}
+
+} // anonymous namespace
 
 gimple_opt_pass *
 make_pass_efagin (gcc::context *ctxt)
 {
   return new pass_efagin (ctxt);
 }
-
