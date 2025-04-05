@@ -17,9 +17,9 @@ You should have received a copy of the GNU General Public License
 along with GCC; see the file COPYING3.  If not see
 <http://www.gnu.org/licenses/>.  */
 
-#include <map>
+#include <unordered_map>
 #include <string>
-#include <vector>  
+#include <vector>
 #include <stdlib.h>
 #include "config.h"
 #include "system.h"
@@ -51,6 +51,9 @@ const pass_data pass_data_efagin =
   0,              /* todo_flags_finish */
 };
 
+/* Currently, this pass detects function clones during compilation.
+   It identifies variants using the base name of the function, and outputs the analysis.
+*/
 class pass_efagin : public gimple_opt_pass
 {
 public:
@@ -62,65 +65,49 @@ public:
   bool gate (function *) final override { return 1; }
 
   unsigned int execute (function *) final override;
+
+private:
+  /* Stores function names to identify clones*/
+  static std::unordered_map<std::string, std::vector<std::string>> function_clones;
+
 };
+
+// Initialize static member
+std::unordered_map<std::string, std::vector<std::string>> pass_efagin::function_clones;
 
 unsigned int pass_efagin::execute(function* fun)
 {
-  // Static structure to hold function clones, for comparison
-  static std::map<std::string, std::vector<std::string>>* function_clones = nullptr;
-
   // If dump file not enabled, exit
   if (!dump_file || !fun)
     return 0;
 
-  // If function_clones not initialized, initialize it
-  if (!function_clones) {
-    function_clones = new std::map<std::string, std::vector<std::string>>();
-  }
-
-  // Get the function's node, check if node exists
-  struct cgraph_node *node = cgraph_node::get(fun->decl);
-  if (!node)
-    return 0;
-
-  // Get the full function name (pointer first, then convert to String)
-  const char *fname = node->name(); 
-  if (!fname)
-    return 0;
-
-  std::string name(fname);
+  // Get the full name of the function
+  std::string name = IDENTIFIER_POINTER(DECL_NAME(fun->decl));
+  fprintf(dump_file, "-------------Examining Func: %s--------\n", name.c_str());
 
   // Skip resolver functions
-  if (name.find(".resolver") != std::string::npos)
+  if (name.find(".resolver") != std::string::npos) {
+    fprintf(dump_file, "-------------End of Diagnostic (resolver function)-------------\n\n");
     return 0;
+  }
 
   // Extract base function name (remove everything after first dot)
-  std::string base_name = name.find_first_of(".") != std::string::npos 
-    ? name.substr(0, name.find_first_of(".")) 
+  std::string base_name = name.find_first_of(".") != std::string::npos
+    ? name.substr(0, name.find_first_of("."))
     : name;
 
-  // Check if base not recorded yet
-  if (function_clones->find(base_name) == function_clones->end()) {
-  // First time seeing this base function
-    (*function_clones)[base_name] = std::vector<std::string>();
+  auto it = function_clones.find(base_name);
 
-  // If base already recorded (found a clone)
-  } else {
-
-    fprintf(dump_file, "-----------------------------------\n");
-    fprintf(dump_file, "New clone detected for base function: %s\n\n", base_name.c_str());
-
-    // Print existing variants
-    for (const auto& variant : (*function_clones)[base_name]) {
-      fprintf(dump_file, "     Existing: %s\n", variant.c_str());
-    }
-
-    // Print the new variant
-    fprintf(dump_file, "  New variant: %s\n\n-----------------------------------\n\n", name.c_str());
+  // If this base name already has registered clones, print them
+  if (it != function_clones.end()) {
+    for (const auto& variant : it->second)
+      fprintf(dump_file, "CLONE IDENTIFIED: %s\n", variant.c_str());
+    fprintf(dump_file, "CURRENT: %s\n\n", name.c_str());
   }
 
   // Add this function name to the list of variants for the base function
-  (*function_clones)[base_name].push_back(name);
+  function_clones[base_name].push_back(name);
+  fprintf(dump_file, "-------------End of Diagnostic-------------\n\n");
 
   return 0;
 }
