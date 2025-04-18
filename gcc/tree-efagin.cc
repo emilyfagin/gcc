@@ -174,24 +174,30 @@ unsigned int pass_efagin::execute(function* fun)
     : name;
 
   funcData fdata = {name, get_signature(fun)};
+
+  fprintf(dump_file, "CURRENT SIGNATURE:\n%s\n", fdata.signature.c_str());
   
   auto it = fun_map.find(base_name);
- 
+
   // If this base name already has registered clones, print them
   if (it != fun_map.end()) {
-    for (auto& variant : it->second) {
+    for (auto& variant : it->second) { // use `.first` if using pair
       fprintf(dump_file, "CLONE IDENTIFIED: [%s]\n%s\n", 
         variant.full_name.c_str(), 
         variant.signature.c_str());
-      
-      fprintf(dump_file, "CURRENT:\n%s\n", 
-        fdata.signature.c_str());
-        char msg[256];
+
+      char msg[256];
+      bool is_same = (fdata.signature == variant.signature);
       snprintf(msg, sizeof(msg), "\n[%s] = %s\n", 
         base_name.c_str(), 
-        (fdata.signature == variant.signature) ? "PRUNE" : "NOPRUNE");
+        is_same ? "PRUNE" : "NOPRUNE");
       fprintf(dump_file, msg);
       printf(msg);
+
+      if (is_same) {
+        // Signatures match — no need to continue
+        break;
+      }
     }
   }
   
