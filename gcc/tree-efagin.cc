@@ -57,10 +57,10 @@ const pass_data pass_data_efagin =
 struct funcData { std::string full_name; std::string signature; };
 
 /* 
-   Currently, this pass generates a function signature based on 
-   gimple statements, and other metrics. It detects function 
-   clones using the base name of the function, and compares their 
-   signature, outputting PRUNE or NOPRUNE based on analysis.
+  Currently, this pass generates a function signature based on 
+  gimple statements, and other metrics. It detects function 
+  clones using the base name of the function, and compares their 
+  signature, outputting PRUNE or NOPRUNE based on analysis.
 */
 class pass_efagin : public gimple_opt_pass
 {
@@ -86,25 +86,67 @@ std::unordered_map<std::string, std::vector<funcData>>
 // Generate a signature for a function
 std::string pass_efagin::get_signature(function* fun) {
   std::stringstream signature;
-
+  
+  // Add basic block & edge count
+  signature << "#B" << n_basic_blocks_for_fn(fun) 
+    << " #E" << n_edges_for_fn(fun) << "|\n";
+  
+  // Add gimple statements
   basic_block bb;
-  int num_gimple_stmts = 0;
-
   FOR_EACH_BB_FN(bb, fun) {
-    // iterate through all gimple statments in block
+    
+    // Start of basic block, predecessors & successors
+    signature << " B" << "(" << EDGE_COUNT(bb->preds) 
+      << ">" << EDGE_COUNT(bb->succs) << ")";
+    
+    // Process regular statements in order
     for (gimple_stmt_iterator gsi = gsi_start_bb(bb); 
       !gsi_end_p(gsi); gsi_next(&gsi)) {
-        
+      
+      gimple* stmt = gsi_stmt(gsi);
+      if (!stmt) continue; 
+      
       // Record statement type with a space prefix
-      signature << gimple_code(gsi_stmt(gsi)) << " ";
-      num_gimple_stmts++;
+      int stmt_code = gimple_code(stmt);
+      
+      // Include simplified operation-specific details
+      switch (stmt_code) {
+        case GIMPLE_PHI: {
+          gphi* phi_stmt = as_a<gphi*>(stmt);
+          signature << " P" << gimple_phi_num_args(phi_stmt);
+          break;
+        }
+        case GIMPLE_ASSIGN: {
+          int rhs_code = gimple_assign_rhs_code(stmt);
+          signature << " =" << rhs_code << "," << gimple_num_ops(stmt);
+          break;
+        }
+          
+        case GIMPLE_CALL: {
+          gcall* call_stmt = as_a<gcall*>(stmt);
+          if (call_stmt) {
+            if (gimple_call_internal_p(call_stmt)) {
+              signature << " I" << (int)gimple_call_internal_fn(call_stmt);
+            } else {
+              signature << " E" << gimple_call_num_args(call_stmt);
+            }
+          }
+          break;
+        }
+          
+        case GIMPLE_COND: {
+          signature << " ?" << (int)gimple_cond_code(stmt);
+          break;
+        }
+          
+        default: {
+          // For other statement types, just output the gimple code
+          signature << " " << stmt_code;
+          break;
+        }
+      }
     }
   }
-    
-  signature 
-    << "\nBB\t" << n_basic_blocks_for_fn(fun) 
-    << "\nEG\t" << n_edges_for_fn(fun) 
-    << "\nGMP-S\t" << num_gimple_stmts;
   
   return signature.str();
 }
@@ -112,7 +154,7 @@ std::string pass_efagin::get_signature(function* fun) {
 unsigned int pass_efagin::execute(function* fun)
 {
   // If dump file not enabled, exit
-  if (!dump_file || !fun )
+  if (!dump_file || !fun)
     return 0;
 
   // Get the full name of the function
@@ -122,7 +164,6 @@ unsigned int pass_efagin::execute(function* fun)
 	
   // Skip resolver functions
   if (name.find(".resolver") != std::string::npos) {
-    fprintf(dump_file, "---End of Diagnostic (resolver)---\n");
     return 0;
   }
 
@@ -133,28 +174,30 @@ unsigned int pass_efagin::execute(function* fun)
     : name;
 
   funcData fdata = {name, get_signature(fun)};
-  fprintf(dump_file, "SIGNATURE:\n%s\n", fdata.signature.c_str());
-
   
   auto it = fun_map.find(base_name);
  
   // If this base name already has registered clones, print them
   if (it != fun_map.end()) {
     for (auto& variant : it->second) {
-      fprintf(dump_file, "CLONE: %s\nCLONE SIGNATURE:\n%s\n", 
-        variant.full_name.c_str(), variant.signature.c_str());
+      fprintf(dump_file, "CLONE IDENTIFIED: [%s]\n%s\n", 
+        variant.full_name.c_str(), 
+        variant.signature.c_str());
       
-      if (fdata.signature == variant.signature) {
-        fprintf(dump_file, "[%s] = PRUNE\n", base_name.c_str());
-      } else {
-        fprintf(dump_file, "[%s] = NOPRUNE\n", base_name.c_str());
-      }
+      fprintf(dump_file, "CURRENT:\n%s\n", 
+        fdata.signature.c_str());
+        char msg[256];
+      snprintf(msg, sizeof(msg), "\n[%s] = %s\n", 
+        base_name.c_str(), 
+        (fdata.signature == variant.signature) ? "PRUNE" : "NOPRUNE");
+      fprintf(dump_file, msg);
+      printf(msg);
     }
   }
   
-  // Add function data to the clones map
+  // Add this function name to the list of variants for the base function
   fun_map[base_name].push_back(fdata);
-  fprintf(dump_file, "--------End of Diagnostic---\n\n");
+  fprintf(dump_file, "-------------End of Diagnostic-------------\n\n");
 
   return 0;
 }
